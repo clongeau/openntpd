@@ -214,6 +214,14 @@ int main(){errno=0; setresgid(0,0,0); if (errno==ENOSYS) exit(1); else exit(0);}
 	)
 ])
 
+##chl
+AC_CHECK_FUNC([clock_gettime],
+	[AC_DEFINE([HAVE_CLOCK_GETTIME], [1], [Define if your libraries define clock_gettime()])],
+	[AC_CHECK_LIB([rt], [clock_gettime],
+		[LIBS="$LIBS -lrt"; AC_DEFINE([HAVE_CLOCK_GETTIME])])]
+)
+##chl
+
 dnl Check for getaddrinfo and friends.
 AC_CHECK_FUNCS(getaddrinfo getnameinfo freeaddrinfo)
 
