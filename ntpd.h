@@ -1,4 +1,4 @@
-/*	$OpenBSD: ntpd.h,v 1.61 2005/09/24 00:32:03 dtucker Exp $ */
+/*	$OpenBSD: ntpd.h,v 1.105 2011/09/21 16:38:05 phessler Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -26,39 +26,49 @@
 #include <netinet/ip.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <pwd.h>
 #include <stdarg.h>
 
 #include "ntp.h"
+#include "openbsd-compat/imsg.h"
 
 #ifndef NTPD_USER
 #define	NTPD_USER	"_ntp"
 #endif
 #define	CONFFILE	SYSCONFDIR "/ntpd.conf"
-
-#define	READ_BUF_SIZE		4096
-
-#define	NTPD_OPT_VERBOSE	0x0001
-#define	NTPD_OPT_VERBOSE2	0x0002
+#define DRIFTFILE	"/var/db/ntpd.drift"
 
 #define	INTERVAL_QUERY_NORMAL		30	/* sync to peers every n secs */
 #define	INTERVAL_QUERY_PATHETIC		60
-#define	INTERVAL_QUERY_AGRESSIVE	5
+#define	INTERVAL_QUERY_AGGRESSIVE	5
 
 #define	TRUSTLEVEL_BADPEER		6
 #define	TRUSTLEVEL_PATHETIC		2
-#define	TRUSTLEVEL_AGRESSIVE		8
+#define	TRUSTLEVEL_AGGRESSIVE		8
 #define	TRUSTLEVEL_MAX			10
 
 #define	MAX_SERVERS_DNS			8
 
-#define	QSCALE_OFF_MIN			0.05
-#define	QSCALE_OFF_MAX			0.50
+#define	QSCALE_OFF_MIN			0.001
+#define	QSCALE_OFF_MAX			0.050
 
 #define	QUERYTIME_MAX		15	/* single query might take n secs max */
 #define	OFFSET_ARRAY_SIZE	8
-#define	SETTIME_MIN_OFFSET	180	/* min offset for settime at start */
+#define	SENSOR_OFFSETS		6
 #define	SETTIME_TIMEOUT		15	/* max seconds to wait with -s */
-#define	LOG_NEGLIGEE		128	/* negligible drift to not log (ms) */
+#define	LOG_NEGLIGIBLE_ADJTIME	32	/* negligible drift to not log (ms) */
+#define	LOG_NEGLIGIBLE_ADJFREQ	0.05	/* negligible rate to not log (ppm) */
+#define	FREQUENCY_SAMPLES	8	/* samples for est. of permanent drift */
+#define	MAX_FREQUENCY_ADJUST	128e-5	/* max correction per iteration */
+#define REPORT_INTERVAL		(24*60*60) /* interval between status reports */
+#define MAX_SEND_ERRORS		3	/* max send errors before reconnect */
+
+#define FILTER_ADJFREQ		0x01	/* set after doing adjfreq */
+
+#define	SENSOR_DATA_MAXAGE		(15*60)
+#define	SENSOR_QUERY_INTERVAL		15
+#define	SENSOR_QUERY_INTERVAL_SETTIME	(SETTIME_TIMEOUT/3)
+#define	SENSOR_SCAN_INTERVAL		(5*60)
 
 enum client_state {
 	STATE_NONE,
@@ -73,11 +83,13 @@ struct listen_addr {
 	TAILQ_ENTRY(listen_addr)	 entry;
 	struct sockaddr_storage		 sa;
 	int				 fd;
+	int				 rtable;
 };
 
 struct ntp_addr {
 	struct ntp_addr		*next;
 	struct sockaddr_storage	 ss;
+	int			 rtable;
 };
 
 struct ntp_addr_wrap {
@@ -91,7 +103,7 @@ struct ntp_status {
 	double		rootdispersion;
 	double		reftime;
 	u_int32_t	refid;
-	u_int32_t	refid4;
+	u_int32_t	send_refid;
 	u_int8_t	synced;
 	u_int8_t	leap;
 	int8_t		precision;
@@ -121,68 +133,63 @@ struct ntp_peer {
 	u_int32_t			 id;
 	u_int8_t			 shift;
 	u_int8_t			 trustlevel;
+	u_int8_t			 weight;
 	int				 lasterror;
+	int				 senderrors;
+	int				 rtable;
+};
+
+struct ntp_sensor {
+	TAILQ_ENTRY(ntp_sensor)		 entry;
+	struct ntp_offset		 offsets[SENSOR_OFFSETS];
+	struct ntp_offset		 update;
+	time_t				 next;
+	time_t				 last;
+	char				*device;
+	u_int32_t			 refid;
+	int				 sensordevid;
+	int				 correction;
+	u_int8_t			 weight;
+	u_int8_t			 shift;
+};
+
+struct ntp_conf_sensor {
+	TAILQ_ENTRY(ntp_conf_sensor)		 entry;
+	char					*device;
+	char					*refstr;
+	int					 correction;
+	u_int8_t				 weight;
+};
+
+struct ntp_freq {
+	double				overall_offset;
+	double				x, y;
+	double				xx, xy;
+	int				samples;
+	u_int				num;
 };
 
 struct ntpd_conf {
-	TAILQ_HEAD(listen_addrs, listen_addr)	listen_addrs;
-	TAILQ_HEAD(ntp_peers, ntp_peer)		ntp_peers;
-	struct ntp_status			status;
-	u_int8_t				listen_all;
-	u_int8_t				settime;
-	u_int8_t				debug;
-	u_int32_t				scale;
-};
-
-struct buf {
-	TAILQ_ENTRY(buf)	 entry;
-	u_char			*buf;
-	size_t			 size;
-	size_t			 wpos;
-	size_t			 rpos;
-};
-
-struct msgbuf {
-	TAILQ_HEAD(, buf)	 bufs;
-	u_int32_t		 queued;
-	int			 fd;
-};
-
-struct buf_read {
-	size_t			 wpos;
-	u_char			 buf[READ_BUF_SIZE];
-	u_char			*rptr;
-};
-
-/* ipc messages */
-
-#define	IMSG_HEADER_SIZE	sizeof(struct imsg_hdr)
-#define	MAX_IMSGSIZE		8192
-
-struct imsgbuf {
-	int			fd;
-	pid_t			pid;
-	struct buf_read		r;
-	struct msgbuf		w;
+	TAILQ_HEAD(listen_addrs, listen_addr)		listen_addrs;
+	TAILQ_HEAD(ntp_peers, ntp_peer)			ntp_peers;
+	TAILQ_HEAD(ntp_sensors, ntp_sensor)		ntp_sensors;
+	TAILQ_HEAD(ntp_conf_sensors, ntp_conf_sensor)	ntp_conf_sensors;
+	struct ntp_status				status;
+	struct ntp_freq					freq;
+	u_int32_t					scale;
+	u_int8_t					listen_all;
+	u_int8_t					settime;
+	u_int8_t					debug;
+	u_int8_t					noaction;
+	u_int8_t					filters;
 };
 
 enum imsg_type {
 	IMSG_NONE,
 	IMSG_ADJTIME,
+	IMSG_ADJFREQ,
 	IMSG_SETTIME,
 	IMSG_HOST_DNS
-};
-
-struct imsg_hdr {
-	enum imsg_type	type;
-	u_int32_t	peerid;
-	pid_t		pid;
-	u_int16_t	len;
-};
-
-struct imsg {
-	struct imsg_hdr	 hdr;
-	void		*data;
 };
 
 /* prototypes */
@@ -195,42 +202,27 @@ void		 log_info(const char *, ...);
 void		 log_debug(const char *, ...);
 void		 fatal(const char *);
 void		 fatalx(const char *);
-const char *	 log_sockaddr(struct sockaddr *);
-
-/* buffer.c */
-struct buf	*buf_open(size_t);
-int		 buf_add(struct buf *, void *, size_t);
-int		 buf_close(struct msgbuf *, struct buf *);
-void		 buf_free(struct buf *);
-void		 msgbuf_init(struct msgbuf *);
-void		 msgbuf_clear(struct msgbuf *);
-int		 msgbuf_write(struct msgbuf *);
-
-/* imsg.c */
-void	 imsg_init(struct imsgbuf *, int);
-int	 imsg_read(struct imsgbuf *);
-int	 imsg_get(struct imsgbuf *, struct imsg *);
-int	 imsg_compose(struct imsgbuf *, enum imsg_type, u_int32_t, pid_t,
-	    void *, u_int16_t);
-struct buf	*imsg_create(struct imsgbuf *, enum imsg_type, u_int32_t, pid_t,
-		    u_int16_t);
-int	 imsg_add(struct buf *, void *, u_int16_t);
-int	 imsg_close(struct imsgbuf *, struct buf *);
-void	 imsg_free(struct imsg *);
+const char	*log_sockaddr(struct sockaddr *);
 
 /* ntp.c */
-pid_t	 ntp_main(int[2], struct ntpd_conf *);
-void	 priv_adjtime(void);
+pid_t	 ntp_main(int[2], struct ntpd_conf *, struct passwd *);
+int	 priv_adjtime(void);
 void	 priv_settime(double);
 void	 priv_host_dns(char *, u_int32_t);
+int	 offset_compare(const void *, const void *);
+void	 update_scale(double);
+time_t	 scale_interval(time_t);
+time_t	 error_interval(void);
+extern struct ntpd_conf *conf;
 
 /* parse.y */
 int	 parse_config(const char *, struct ntpd_conf *);
 
 /* config.c */
-int		 host(const char *, struct ntp_addr **);
-int		 host_dns(const char *, struct ntp_addr **);
-struct ntp_peer	*new_peer(void);
+int			 host(const char *, struct ntp_addr **);
+int			 host_dns(const char *, struct ntp_addr **);
+struct ntp_peer		*new_peer(void);
+struct ntp_conf_sensor	*new_sensor(char *);
 
 /* ntp_msg.c */
 int	ntp_getmsg(struct sockaddr *, char *, ssize_t, struct ntp_msg *);
@@ -248,15 +240,26 @@ int	client_nextaddr(struct ntp_peer *);
 int	client_query(struct ntp_peer *);
 int	client_dispatch(struct ntp_peer *, u_int8_t);
 void	client_log_error(struct ntp_peer *, const char *, int);
-void	update_scale(double);
-time_t	scale_interval(time_t);
-time_t	error_interval(void);
 void	set_next(struct ntp_peer *, time_t);
 
 /* util.c */
-double			gettime(void);
-void			d_to_tv(double, struct timeval *);
-double			lfp_to_d(struct l_fixedpt);
-struct l_fixedpt	d_to_lfp(double);
-double			sfp_to_d(struct s_fixedpt);
-struct s_fixedpt	d_to_sfp(double);
+double			 gettime_corrected(void);
+double			 getoffset(void);
+double			 gettime(void);
+time_t			 getmonotime(void);
+void			 d_to_tv(double, struct timeval *);
+double			 lfp_to_d(struct l_fixedpt);
+struct l_fixedpt	 d_to_lfp(double);
+double			 sfp_to_d(struct s_fixedpt);
+struct s_fixedpt	 d_to_sfp(double);
+char			*print_rtable(int);
+
+/* sensors.c */
+void			sensor_init(void);
+int			sensor_scan(void);
+void			sensor_query(struct ntp_sensor *);
+int			sensor_hotplugfd(void);
+void			sensor_hotplugevent(int);
+
+/* ntp_dns.c */
+pid_t	ntp_dns(int[2], struct ntpd_conf *, struct passwd *);

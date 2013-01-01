@@ -1,4 +1,4 @@
-/*	$OpenBSD: client.c,v 1.66 2005/09/24 00:32:03 dtucker Exp $ */
+/*	$OpenBSD: client.c,v 1.89 2011/09/21 15:41:30 phessler Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -17,8 +17,12 @@
  * OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+#include "includes.h"
+
 #include <sys/param.h>
 #include <errno.h>
+#include <openssl/md5.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -32,14 +36,14 @@ void	set_deadline(struct ntp_peer *, time_t);
 void
 set_next(struct ntp_peer *p, time_t t)
 {
-	p->next = time(NULL) + t;
+	p->next = getmonotime() + t;
 	p->deadline = 0;
 }
 
 void
 set_deadline(struct ntp_peer *p, time_t t)
 {
-	p->deadline = time(NULL) + t;
+	p->deadline = getmonotime() + t;
 	p->next = 0;
 }
 
@@ -54,6 +58,7 @@ client_peer_init(struct ntp_peer *p)
 	p->shift = 0;
 	p->trustlevel = TRUSTLEVEL_PATHETIC;
 	p->lasterror = 0;
+	p->senderrors = 0;
 
 	return (client_addr_init(p));
 }
@@ -80,7 +85,7 @@ client_addr_init(struct ntp_peer *p)
 			p->state = STATE_DNS_DONE;
 			break;
 		default:
-			fatal("king bula sez: wrong AF in client_addr_init");
+			fatalx("king bula sez: wrong AF in client_addr_init");
 			/* not reached */
 		}
 	}
@@ -94,8 +99,13 @@ client_addr_init(struct ntp_peer *p)
 int
 client_nextaddr(struct ntp_peer *p)
 {
-	close(p->query->fd);
-	p->query->fd = -1;
+	if (p->query->fd != -1) {
+		close(p->query->fd);
+		p->query->fd = -1;
+	}
+
+	if (p->state == STATE_DNS_INPROGRESS)
+		return (-1);
 
 	if (p->addr_head.a == NULL) {
 		priv_host_dns(p->addr_head.name, p->id);
@@ -115,14 +125,18 @@ client_nextaddr(struct ntp_peer *p)
 int
 client_query(struct ntp_peer *p)
 {
-	int	tos = IPTOS_LOWDELAY;
+	int	val;
 
 	if (p->addr == NULL && client_nextaddr(p) == -1) {
-		set_next(p, error_interval());
+		set_next(p, MAX(SETTIME_TIMEOUT,
+		    scale_interval(INTERVAL_QUERY_AGGRESSIVE)));
 		return (0);
 	}
 
 	if (p->state < STATE_DNS_DONE || p->addr == NULL)
+		return (-1);
+
+	if (p->addr->ss.ss_family != AF_INET && p->rtable != -1)
 		return (-1);
 
 	if (p->query->fd == -1) {
@@ -131,18 +145,32 @@ client_query(struct ntp_peer *p)
 		if ((p->query->fd = socket(p->addr->ss.ss_family, SOCK_DGRAM,
 		    0)) == -1)
 			fatal("client_query socket");
+
+#ifdef HAVE_RTABLE
+		if (p->addr->ss.ss_family == AF_INET && p->rtable != -1 &&
+		    setsockopt(p->query->fd, IPPROTO_IP, SO_RTABLE,
+		    &p->rtable, sizeof(p->rtable)) == -1)
+			fatal("client_query setsockopt SO_RTABLE");
+#endif
+
 		if (connect(p->query->fd, sa, SA_LEN(sa)) == -1) {
 			if (errno == ECONNREFUSED || errno == ENETUNREACH ||
-			    errno == EHOSTUNREACH) {
+			    errno == EHOSTUNREACH || errno == EADDRNOTAVAIL) {
 				client_nextaddr(p);
-				set_next(p, error_interval());
+				set_next(p, MAX(SETTIME_TIMEOUT,
+				    scale_interval(INTERVAL_QUERY_AGGRESSIVE)));
 				return (-1);
 			} else
 				fatal("client_query connect");
 		}
+		val = IPTOS_LOWDELAY;
 		if (p->addr->ss.ss_family == AF_INET && setsockopt(p->query->fd,
-		    IPPROTO_IP, IP_TOS, &tos, sizeof(tos)) == -1)
+		    IPPROTO_IP, IP_TOS, &val, sizeof(val)) == -1)
 			log_warn("setsockopt IPTOS_LOWDELAY");
+		val = 1;
+		if (setsockopt(p->query->fd, SOL_SOCKET, SO_TIMESTAMP,
+		    &val, sizeof(val)) == -1)
+			fatal("setsockopt SO_TIMESTAMP");
 	}
 
 	/*
@@ -161,14 +189,17 @@ client_query(struct ntp_peer *p)
 
 	p->query->msg.xmttime.int_partl = arc4random();
 	p->query->msg.xmttime.fractionl = arc4random();
-	p->query->xmttime = gettime();
+	p->query->xmttime = gettime_corrected();
 
 	if (ntp_sendmsg(p->query->fd, NULL, &p->query->msg,
 	    NTP_MSGSIZE_NOAUTH, 0) == -1) {
+		p->senderrors++;
 		set_next(p, INTERVAL_QUERY_PATHETIC);
+		p->trustlevel = TRUSTLEVEL_PATHETIC;
 		return (-1);
 	}
 
+	p->senderrors = 0;
 	p->state = STATE_QUERY_SENT;
 	set_deadline(p, QUERYTIME_MAX);
 
@@ -178,25 +209,75 @@ client_query(struct ntp_peer *p)
 int
 client_dispatch(struct ntp_peer *p, u_int8_t settime)
 {
-	char			 buf[NTP_MSGSIZE];
-	ssize_t			 size;
 	struct ntp_msg		 msg;
+	struct msghdr		 somsg;
+	struct iovec		 iov[1];
+	struct timeval		 tv;
+	char			 buf[NTP_MSGSIZE];
+	union {
+		struct cmsghdr	hdr;
+		char		buf[CMSG_SPACE(sizeof(tv))];
+	} cmsgbuf;
+	struct cmsghdr		*cmsg;
+	ssize_t			 size;
 	double			 T1, T2, T3, T4;
 	time_t			 interval;
 
-	if ((size = recvfrom(p->query->fd, &buf, sizeof(buf), 0,
-	    NULL, NULL)) == -1) {
+	bzero(&somsg, sizeof(somsg));
+	iov[0].iov_base = buf;
+	iov[0].iov_len = sizeof(buf);
+	somsg.msg_iov = iov;
+	somsg.msg_iovlen = 1;
+	somsg.msg_control = cmsgbuf.buf;
+	somsg.msg_controllen = sizeof(cmsgbuf.buf);
+
+	T4 = getoffset();
+	if ((size = recvmsg(p->query->fd, &somsg, 0)) == -1) {
 		if (errno == EHOSTUNREACH || errno == EHOSTDOWN ||
 		    errno == ENETUNREACH || errno == ENETDOWN ||
-		    errno == ECONNREFUSED || errno == EADDRNOTAVAIL) {
-			client_log_error(p, "recvfrom", errno);
+		    errno == ECONNREFUSED || errno == EADDRNOTAVAIL ||
+		    errno == ENOPROTOOPT || errno == ENOENT) {
+			client_log_error(p, "recvmsg", errno);
 			set_next(p, error_interval());
 			return (0);
 		} else
 			fatal("recvfrom");
 	}
 
-	T4 = gettime();
+	if (somsg.msg_flags & MSG_TRUNC) {
+		client_log_error(p, "recvmsg packet", EMSGSIZE);
+		set_next(p, error_interval());
+		return (0);
+	}
+
+	if (somsg.msg_flags & MSG_CTRUNC) {
+		client_log_error(p, "recvmsg control data", E2BIG);
+		set_next(p, error_interval());
+		return (0);
+	}
+
+#ifdef HAVE_RTABLE
+	if (p->rtable != -1 &&
+	    setsockopt(p->query->fd, IPPROTO_IP, SO_RTABLE, &p->rtable,
+	    sizeof(p->rtable)) == -1)
+		fatal("client_dispatch setsockopt SO_RTABLE");
+#endif
+
+	for (cmsg = CMSG_FIRSTHDR(&somsg); cmsg != NULL;
+	    cmsg = CMSG_NXTHDR(&somsg, cmsg)) {
+		if (cmsg->cmsg_level == SOL_SOCKET &&
+		    cmsg->cmsg_type == SCM_TIMESTAMP) {
+			memcpy(&tv, CMSG_DATA(cmsg), sizeof(tv));
+			T4 += tv.tv_sec + JAN_1970 + 1.0e-6 * tv.tv_usec;
+			break;
+		}
+	}
+
+	if (T4 < JAN_1970) {
+		client_log_error(p, "recvmsg control format", EBADF);
+		set_next(p, error_interval());
+		return (0);
+	}
 
 	ntp_getmsg((struct sockaddr *)&p->addr->ss, buf, size, &msg);
 
@@ -206,10 +287,21 @@ client_dispatch(struct ntp_peer *p, u_int8_t settime)
 
 	if ((msg.status & LI_ALARM) == LI_ALARM || msg.stratum == 0 ||
 	    msg.stratum > NTP_MAXSTRATUM) {
+		char s[16];
+
+		if ((msg.status & LI_ALARM) == LI_ALARM) {
+			strlcpy(s, "alarm", sizeof(s));
+		} else if (msg.stratum == 0) {
+			/* Kiss-o'-Death (KoD) packet */
+			strlcpy(s, "KoD", sizeof(s));
+		} else if (msg.stratum > NTP_MAXSTRATUM) {
+			snprintf(s, sizeof(s), "stratum %d", msg.stratum);
+		}
 		interval = error_interval();
 		set_next(p, interval);
-		log_info("reply from %s: not synced, next query %ds",
-		    log_sockaddr((struct sockaddr *)&p->addr->ss), interval);
+		log_info("reply from %s: not synced (%s), next query %ds",
+		    log_sockaddr((struct sockaddr *)&p->addr->ss), s,
+			interval);
 		return (0);
 	}
 
@@ -232,34 +324,60 @@ client_dispatch(struct ntp_peer *p, u_int8_t settime)
 	T2 = lfp_to_d(msg.rectime);
 	T3 = lfp_to_d(msg.xmttime);
 
+	/*
+	 * XXX workaround: time_t / tv_sec must never wrap.
+	 * around 2020 we will need a solution (64bit time_t / tv_sec).
+	 * consider every answer with a timestamp beyond january 2030 bogus.
+	 */
+	if (T2 > JAN_2030 || T3 > JAN_2030) {
+		set_next(p, error_interval());
+		return (0);
+	}
+
 	p->reply[p->shift].offset = ((T2 - T1) + (T3 - T4)) / 2;
 	p->reply[p->shift].delay = (T4 - T1) - (T3 - T2);
 	if (p->reply[p->shift].delay < 0) {
 		interval = error_interval();
 		set_next(p, interval);
-		log_info("reply from %s: negative delay %f",
+		log_info("reply from %s: negative delay %fs, "
+		    "next query %ds",
 		    log_sockaddr((struct sockaddr *)&p->addr->ss),
-		    p->reply[p->shift].delay);
+		    p->reply[p->shift].delay, interval);
 		return (0);
 	}
 	p->reply[p->shift].error = (T2 - T1) - (T3 - T4);
-	p->reply[p->shift].rcvd = time(NULL);
+	p->reply[p->shift].rcvd = getmonotime();
 	p->reply[p->shift].good = 1;
 
 	p->reply[p->shift].status.leap = (msg.status & LIMASK);
 	p->reply[p->shift].status.precision = msg.precision;
 	p->reply[p->shift].status.rootdelay = sfp_to_d(msg.rootdelay);
 	p->reply[p->shift].status.rootdispersion = sfp_to_d(msg.dispersion);
-	p->reply[p->shift].status.refid = ntohl(msg.refid);
-	p->reply[p->shift].status.refid4 = msg.xmttime.fractionl;
+	p->reply[p->shift].status.refid = msg.refid;
 	p->reply[p->shift].status.reftime = lfp_to_d(msg.reftime);
 	p->reply[p->shift].status.poll = msg.ppoll;
 	p->reply[p->shift].status.stratum = msg.stratum;
 
+	if (p->addr->ss.ss_family == AF_INET) {
+		p->reply[p->shift].status.send_refid =
+		    ((struct sockaddr_in *)&p->addr->ss)->sin_addr.s_addr;
+	} else if (p->addr->ss.ss_family == AF_INET6) {
+		MD5_CTX		context;
+		u_int8_t	digest[MD5_DIGEST_LENGTH];
+
+		MD5_Init(&context);
+		MD5_Update(&context, ((struct sockaddr_in6 *)&p->addr->ss)->
+		    sin6_addr.s6_addr, sizeof(struct in6_addr));
+		MD5_Final(digest, &context);
+		memcpy((char *)&p->reply[p->shift].status.send_refid, digest,
+		    sizeof(u_int32_t));
+	} else
+		p->reply[p->shift].status.send_refid = msg.xmttime.fractionl;
+
 	if (p->trustlevel < TRUSTLEVEL_PATHETIC)
 		interval = scale_interval(INTERVAL_QUERY_PATHETIC);
-	else if (p->trustlevel < TRUSTLEVEL_AGRESSIVE)
-		interval = scale_interval(INTERVAL_QUERY_AGRESSIVE);
+	else if (p->trustlevel < TRUSTLEVEL_AGGRESSIVE)
+		interval = scale_interval(INTERVAL_QUERY_AGGRESSIVE);
 	else
 		interval = scale_interval(INTERVAL_QUERY_NORMAL);
 
@@ -276,8 +394,10 @@ client_dispatch(struct ntp_peer *p, u_int8_t settime)
 	}
 
 	log_debug("reply from %s: offset %f delay %f, "
-	    "next query %ds", log_sockaddr((struct sockaddr *)&p->addr->ss),
-	    p->reply[p->shift].offset, p->reply[p->shift].delay, interval);
+	    "next query %ds %s",
+	    log_sockaddr((struct sockaddr *)&p->addr->ss),
+	    p->reply[p->shift].offset, p->reply[p->shift].delay, interval,
+	    print_rtable(p->rtable));
 
 	client_update(p);
 	if (settime)
@@ -318,12 +438,11 @@ client_update(struct ntp_peer *p)
 		return (-1);
 
 	memcpy(&p->update, &p->reply[best], sizeof(p->update));
-	priv_adjtime();
-
-	for (i = 0; i < OFFSET_ARRAY_SIZE; i++)
-		if (p->reply[i].rcvd <= p->reply[best].rcvd)
-			p->reply[i].good = 0;
-
+	if (priv_adjtime() == 0) {
+		for (i = 0; i < OFFSET_ARRAY_SIZE; i++)
+			if (p->reply[i].rcvd <= p->reply[best].rcvd)
+				p->reply[i].good = 0;
+	}
 	return (0);
 }
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: util.c,v 1.10 2004/12/08 15:47:38 mickey Exp $ */
+/*	$OpenBSD: util.c,v 1.14 2011/09/21 15:41:30 phessler Exp $ */
 
 /*
  * Copyright (c) 2004 Alexander Guy <alexander.guy@andern.org>
@@ -18,8 +18,25 @@
 
 #include <sys/time.h>
 #include <limits.h>
+#include <stdio.h>
+#include <time.h>
 
 #include "ntpd.h"
+
+double
+gettime_corrected(void)
+{
+	return (gettime() + getoffset());
+}
+
+double
+getoffset(void)
+{
+	struct timeval	tv;
+	if (adjtime(NULL, &tv) == -1)
+		return (0.0);
+	return (tv.tv_sec + 1.0e-6 * tv.tv_usec);
+}
 
 double
 gettime(void)
@@ -32,12 +49,27 @@ gettime(void)
 	return (tv.tv_sec + JAN_1970 + 1.0e-6 * tv.tv_usec);
 }
 
+time_t
+getmonotime(void)
+{
+	struct timespec	ts;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+		fatal("clock_gettime");
+
+	return (ts.tv_sec);
+}
+
 
 void
 d_to_tv(double d, struct timeval *tv)
 {
 	tv->tv_sec = (long)d;
 	tv->tv_usec = (d - tv->tv_sec) * 1000000;
+	while (tv->tv_usec < 0) {
+		tv->tv_usec += 1000000;
+		tv->tv_sec -= 1;
+	}
 }
 
 double
@@ -86,4 +118,16 @@ d_to_sfp(double d)
 	sfp.fractions = htons((u_int16_t)((d - (u_int16_t)d) * USHRT_MAX));
 
 	return (sfp);
+}
+
+char *
+print_rtable(int r)
+{
+	static char b[11];
+
+	b[0] = 0;
+	if (r > 0)
+		snprintf(b, sizeof(b), "rtable %d", r);
+
+	return(b);
 }

@@ -32,10 +32,12 @@ STRIP_OPT=@STRIP_OPT@
 
 PROG=	ntpd
 LIBCOMPAT=openbsd-compat/libopenbsd-compat.a
-SRCS=	ntpd.c buffer.c log.c imsg.c ntp.c ntp_msg.c config.c \
-	server.c client.c util.c y.tab.c
-OBJS=	ntpd.o buffer.o log.o imsg.o ntp.o ntp_msg.o config.o \
-	server.o client.o util.o y.tab.o
+SRCS=	ntpd.c log.c ntp.c ntp_msg.c config.c \
+	server.c client.c sensors.c util.c ntp_dns.c \
+	y.tab.c
+OBJS=	ntpd.o log.o ntp.o ntp_msg.o config.o \
+	server.o client.o sensors.o util.o ntp_dns.o \
+	y.tab.o
 YFLAGS=
 MANPAGES_IN=	ntpd.8 ntpd.conf.5
 MANPAGES=	ntpd.8.out ntpd.conf.5.out
@@ -63,8 +65,8 @@ catman-do:	$(MANPAGES_IN)
 	nroff -mandoc ntpd.8 |cat -v | sed -e 's/.\^H//g' > ntpd.0
 	nroff -mandoc ntpd.conf.5 | cat -v | sed -e 's/.\^H//g' > ntpd.conf.0
 
-ntpd:	ntpd.o buffer.o log.o imsg.o ntp.o ntp_msg.o config.o \
-	server.o client.o util.o y.tab.o $(LIBCOMPAT)
+ntpd:	ntpd.o log.o ntp.o ntp_msg.o config.o \
+	server.o client.o sensors.o util.o ntp_dns.o y.tab.o $(LIBCOMPAT)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o ntpd $(OBJS) $(LIBCOMPAT) $(LIBS)
 
 .c.o:

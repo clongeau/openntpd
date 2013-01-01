@@ -1,4 +1,4 @@
-/*	$OpenBSD: ntp.h,v 1.11 2004/12/13 12:22:52 dtucker Exp $ */
+/*	$OpenBSD: ntp.h,v 1.13 2009/04/22 07:42:17 henning Exp $ */
 
 /*
  * Copyright (c) 2004 Henning Brauer <henning@openbsd.org>
@@ -107,9 +107,7 @@ struct ntp_msg {
 	struct l_fixedpt orgtime;
 	struct l_fixedpt rectime;
 	struct l_fixedpt xmttime;
-	u_int32_t keyid;
-	u_int8_t digest[NTP_DIGESTSIZE];
-};
+} __packed;
 
 struct ntp_query {
 	int			fd;
@@ -145,6 +143,7 @@ struct ntp_query {
 #define	MODE_RES2	7	/* reserved for private use */
 
 #define	JAN_1970	2208988800UL	/* 1970 - 1900 in seconds */
+#define	JAN_2030	1893456000UL + JAN_1970	/* 1. 1. 2030 00:00:00 */
 
 #define	NTP_VERSION	4
 #define	NTP_MAXSTRATUM	15

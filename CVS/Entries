@@ -1,17 +1,16 @@
-/Makefile/1.7/Sun Jul  4 11:01:49 2004//TOPENBSD_3_9
 /buffer.c/1.9/Thu Aug 11 16:26:29 2005//TOPENBSD_3_9
-/client.c/1.66/Sat Sep 24 00:32:03 2005//TOPENBSD_3_9
-/config.c/1.18/Wed May 11 15:12:35 2005//TOPENBSD_3_9
-/imsg.c/1.11/Tue Apr 26 15:18:22 2005//TOPENBSD_3_9
-/log.c/1.7/Thu Mar 31 12:14:01 2005//TOPENBSD_3_9
-/ntp.c/1.67/Wed Aug 10 13:48:36 2005//TOPENBSD_3_9
-/ntp.h/1.11/Mon Dec 13 12:22:52 2004//TOPENBSD_3_9
-/ntp_msg.c/1.15/Sat Sep 24 00:32:03 2005//TOPENBSD_3_9
-/ntpd.8/1.14/Tue Jun 21 19:55:18 2005//TOPENBSD_3_9
-/ntpd.c/1.41/Tue Feb 21 23:47:00 2006//TOPENBSD_3_9
-/ntpd.conf.5/1.9/Mon Nov  8 19:09:19 2004//TOPENBSD_3_9
-/ntpd.h/1.61/Sat Sep 24 00:32:03 2005//TOPENBSD_3_9
-/parse.y/1.25/Sun Jun 19 16:42:57 2005//TOPENBSD_3_9
-/server.c/1.28/Thu Jan 19 11:20:23 2006//TOPENBSD_3_9
-/util.c/1.10/Wed Dec  8 15:47:38 2004//TOPENBSD_3_9
+/Makefile/1.11/Result of merge+Mon Dec 31 13:31:56 2012//TOPENBSD_5_2
+/client.c/1.89/Mon Dec 31 13:31:56 2012//TOPENBSD_5_2
+/config.c/1.19/Result of merge//TOPENBSD_5_2
+/log.c/1.8/Result of merge//TOPENBSD_5_2
+/ntp.c/1.117/Result of merge+Mon Dec 31 13:31:56 2012//TOPENBSD_5_2
+/ntp.h/1.13/Result of merge//TOPENBSD_5_2
+/ntp_msg.c/1.18/Result of merge+Mon Dec 31 13:31:56 2012//TOPENBSD_5_2
+/ntpd.8/1.31/Result of merge+Mon Dec 31 13:31:56 2012//TOPENBSD_5_2
+/ntpd.c/1.69/Result of merge+Mon Dec 31 13:31:56 2012//TOPENBSD_5_2
+/ntpd.conf.5/1.23/Mon Dec 31 13:31:56 2012//TOPENBSD_5_2
+/ntpd.h/1.105/Result of merge+Mon Dec 31 13:31:56 2012//TOPENBSD_5_2
+/parse.y/1.49/Result of merge//TOPENBSD_5_2
+/server.c/1.36/Result of merge+Mon Dec 31 13:31:56 2012//TOPENBSD_5_2
+/util.c/1.14/Mon Dec 31 13:31:56 2012//TOPENBSD_5_2
 D
