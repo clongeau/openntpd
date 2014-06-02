@@ -1,4 +1,4 @@
-/*	$OpenBSD: client.c,v 1.89 2011/09/21 15:41:30 phessler Exp $ */
+/*	$OpenBSD: client.c,v 1.93 2014/05/12 20:50:46 miod Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -38,6 +38,7 @@ set_next(struct ntp_peer *p, time_t t)
 {
 	p->next = getmonotime() + t;
 	p->deadline = 0;
+	p->poll = t;
 }
 
 void
@@ -136,9 +137,6 @@ client_query(struct ntp_peer *p)
 	if (p->state < STATE_DNS_DONE || p->addr == NULL)
 		return (-1);
 
-	if (p->addr->ss.ss_family != AF_INET && p->rtable != -1)
-		return (-1);
-
 	if (p->query->fd == -1) {
 		struct sockaddr *sa = (struct sockaddr *)&p->addr->ss;
 
@@ -147,8 +145,8 @@ client_query(struct ntp_peer *p)
 			fatal("client_query socket");
 
 #ifdef HAVE_RTABLE
-		if (p->addr->ss.ss_family == AF_INET && p->rtable != -1 &&
-		    setsockopt(p->query->fd, IPPROTO_IP, SO_RTABLE,
+		if (p->rtable != -1 &&
+		    setsockopt(p->query->fd, SOL_SOCKET, SO_RTABLE,
 		    &p->rtable, sizeof(p->rtable)) == -1)
 			fatal("client_query setsockopt SO_RTABLE");
 #endif
@@ -191,8 +189,7 @@ client_query(struct ntp_peer *p)
 	p->query->msg.xmttime.fractionl = arc4random();
 	p->query->xmttime = gettime_corrected();
 
-	if (ntp_sendmsg(p->query->fd, NULL, &p->query->msg,
-	    NTP_MSGSIZE_NOAUTH, 0) == -1) {
+	if (ntp_sendmsg(p->query->fd, NULL, &p->query->msg) == -1) {
 		p->senderrors++;
 		set_next(p, INTERVAL_QUERY_PATHETIC);
 		p->trustlevel = TRUSTLEVEL_PATHETIC;
@@ -258,7 +255,7 @@ client_dispatch(struct ntp_peer *p, u_int8_t settime)
 
 #ifdef HAVE_RTABLE
 	if (p->rtable != -1 &&
-	    setsockopt(p->query->fd, IPPROTO_IP, SO_RTABLE, &p->rtable,
+	    setsockopt(p->query->fd, SOL_SOCKET, SO_RTABLE, &p->rtable,
 	    sizeof(p->rtable)) == -1)
 		fatal("client_dispatch setsockopt SO_RTABLE");
 #endif
@@ -299,9 +296,9 @@ client_dispatch(struct ntp_peer *p, u_int8_t settime)
 		}
 		interval = error_interval();
 		set_next(p, interval);
-		log_info("reply from %s: not synced (%s), next query %ds",
+		log_info("reply from %s: not synced (%s), next query %llds",
 		    log_sockaddr((struct sockaddr *)&p->addr->ss), s,
-			interval);
+			(long long)interval);
 		return (0);
 	}
 
@@ -336,13 +333,14 @@ client_dispatch(struct ntp_peer *p, u_int8_t settime)
 
 	p->reply[p->shift].offset = ((T2 - T1) + (T3 - T4)) / 2;
 	p->reply[p->shift].delay = (T4 - T1) - (T3 - T2);
+	p->reply[p->shift].status.stratum = msg.stratum;
 	if (p->reply[p->shift].delay < 0) {
 		interval = error_interval();
 		set_next(p, interval);
 		log_info("reply from %s: negative delay %fs, "
-		    "next query %ds",
+		    "next query %llds",
 		    log_sockaddr((struct sockaddr *)&p->addr->ss),
-		    p->reply[p->shift].delay, interval);
+		    p->reply[p->shift].delay, (long long)interval);
 		return (0);
 	}
 	p->reply[p->shift].error = (T2 - T1) - (T3 - T4);
@@ -356,7 +354,6 @@ client_dispatch(struct ntp_peer *p, u_int8_t settime)
 	p->reply[p->shift].status.refid = msg.refid;
 	p->reply[p->shift].status.reftime = lfp_to_d(msg.reftime);
 	p->reply[p->shift].status.poll = msg.ppoll;
-	p->reply[p->shift].status.stratum = msg.stratum;
 
 	if (p->addr->ss.ss_family == AF_INET) {
 		p->reply[p->shift].status.send_refid =
@@ -394,10 +391,10 @@ client_dispatch(struct ntp_peer *p, u_int8_t settime)
 	}
 
 	log_debug("reply from %s: offset %f delay %f, "
-	    "next query %ds %s",
+	    "next query %llds %s",
 	    log_sockaddr((struct sockaddr *)&p->addr->ss),
-	    p->reply[p->shift].offset, p->reply[p->shift].delay, interval,
-	    print_rtable(p->rtable));
+	    p->reply[p->shift].offset, p->reply[p->shift].delay,
+	    (long long)interval, print_rtable(p->rtable));
 
 	client_update(p);
 	if (settime)

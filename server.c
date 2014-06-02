@@ -1,4 +1,4 @@
-/*	$OpenBSD: server.c,v 1.36 2011/09/21 15:41:30 phessler Exp $ */
+/*	$OpenBSD: server.c,v 1.38 2013/10/21 08:48:22 phessler Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -140,8 +140,8 @@ setup_listeners(struct servent *se, struct ntpd_conf *lconf, u_int *cnt)
 			log_warn("setsockopt IPTOS_LOWDELAY");
 
 #ifdef HAVE_RTABLE
-		if (la->sa.ss_family == AF_INET && la->rtable != -1 &&
-		    setsockopt(la->fd, IPPROTO_IP, SO_RTABLE, &la->rtable,
+		if (la->rtable != -1 &&
+		    setsockopt(la->fd, SOL_SOCKET, SO_RTABLE, &la->rtable,
 		    sizeof(la->rtable)) == -1)
 			fatal("setup_listeners setsockopt SO_RTABLE");
 #endif
@@ -219,6 +219,6 @@ server_dispatch(int fd, struct ntpd_conf *lconf)
 	reply.rootdelay = d_to_sfp(lconf->status.rootdelay);
 	reply.refid = lconf->status.refid;
 
-	ntp_sendmsg(fd, (struct sockaddr *)&fsa, &reply, size, 0);
+	ntp_sendmsg(fd, (struct sockaddr *)&fsa, &reply);
 	return (0);
 }

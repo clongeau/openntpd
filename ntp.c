@@ -1,4 +1,4 @@
-/*	$OpenBSD: ntp.c,v 1.117 2011/09/21 15:41:30 phessler Exp $ */
+/*	$OpenBSD: ntp.c,v 1.120 2013/11/13 20:44:39 benno Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -42,13 +42,15 @@
 #define	PFD_PIPE_MAIN	0
 #define	PFD_HOTPLUG	1
 #define	PFD_PIPE_DNS	2
-#define	PFD_MAX		3
+#define	PFD_SOCK_CTL	3
+#define	PFD_MAX		4
 
 volatile sig_atomic_t	 ntp_quit = 0;
 volatile sig_atomic_t	 ntp_report = 0;
 struct imsgbuf		*ibuf_main;
 struct imsgbuf		*ibuf_dns;
 struct ntpd_conf	*conf;
+struct ctl_conns	 ctl_conns;
 u_int			 peer_cnt;
 u_int			 sensors_cnt;
 time_t			 lastreport;
@@ -76,12 +78,14 @@ ntp_sighdlr(int sig)
 }
 
 pid_t
-ntp_main(int pipe_prnt[2], struct ntpd_conf *nconf, struct passwd *pw)
+ntp_main(int pipe_prnt[2], int fd_ctl, struct ntpd_conf *nconf,
+    struct passwd *pw)
 {
 	int			 a, b, nfds, i, j, idx_peers, timeout;
-	int			 hotplugfd, nullfd, pipe_dns[2];
+	int			 hotplugfd, nullfd, pipe_dns[2], idx_clients;
 	u_int			 pfd_elms = 0, idx2peer_elms = 0;
 	u_int			 listener_cnt, new_cnt, sent_cnt, trial_cnt;
+	u_int			 ctl_cnt;
 	pid_t			 pid, dns_pid;
 	struct pollfd		*pfd = NULL;
 	struct servent		*se;
@@ -91,6 +95,7 @@ ntp_main(int pipe_prnt[2], struct ntpd_conf *nconf, struct passwd *pw)
 	struct ntp_sensor	*s, *next_s;
 	struct timespec		 tp;
 	struct stat		 stb;
+	struct ctl_conn		*cc;
 	time_t			 nextaction, last_sensor_scan = 0;
 	void			*newp;
 	char			*chrootdir;
@@ -194,10 +199,12 @@ ntp_main(int pipe_prnt[2], struct ntpd_conf *nconf, struct passwd *pw)
 	conf->status.precision = a;
 	conf->scale = 1;
 
+	TAILQ_INIT(&ctl_conns);
 	sensor_init();
 
 	log_info("ntp engine ready");
 
+	ctl_cnt = 0;
 	peer_cnt = 0;
 	TAILQ_FOREACH(p, &conf->ntp_peers, entry)
 		peer_cnt++;
@@ -218,7 +225,7 @@ ntp_main(int pipe_prnt[2], struct ntpd_conf *nconf, struct passwd *pw)
 			idx2peer_elms = peer_cnt;
 		}
 
-		new_cnt = PFD_MAX + peer_cnt + listener_cnt;
+		new_cnt = PFD_MAX + peer_cnt + listener_cnt + ctl_cnt;
 		if (new_cnt > pfd_elms) {
 			if ((newp = realloc(pfd, sizeof(struct pollfd) *
 			    new_cnt)) == NULL) {
@@ -240,6 +247,8 @@ ntp_main(int pipe_prnt[2], struct ntpd_conf *nconf, struct passwd *pw)
 		pfd[PFD_HOTPLUG].events = POLLIN;
 		pfd[PFD_PIPE_DNS].fd = ibuf_dns->fd;
 		pfd[PFD_PIPE_DNS].events = POLLIN;
+		pfd[PFD_SOCK_CTL].fd = fd_ctl;
+		pfd[PFD_SOCK_CTL].events = POLLIN;
 
 		i = PFD_MAX;
 		TAILQ_FOREACH(la, &conf->listen_addrs, entry) {
@@ -293,6 +302,7 @@ ntp_main(int pipe_prnt[2], struct ntpd_conf *nconf, struct passwd *pw)
 				i++;
 			}
 		}
+		idx_clients = i;
 
 		if (last_sensor_scan == 0 ||
 		    last_sensor_scan + SENSOR_SCAN_INTERVAL < getmonotime()) {
@@ -321,6 +331,14 @@ ntp_main(int pipe_prnt[2], struct ntpd_conf *nconf, struct passwd *pw)
 		if (ibuf_dns->w.queued > 0)
 			pfd[PFD_PIPE_DNS].events |= POLLOUT;
 
+		TAILQ_FOREACH(cc, &ctl_conns, entry) {
+			pfd[i].fd = cc->ibuf.fd;
+			pfd[i].events = POLLIN;
+			if (cc->ibuf.w.queued > 0)
+				pfd[i].events |= POLLOUT;
+			i++;
+		}
+
 		timeout = nextaction - getmonotime();
 		if (timeout < 0)
 			timeout = 0;
@@ -332,7 +350,8 @@ ntp_main(int pipe_prnt[2], struct ntpd_conf *nconf, struct passwd *pw)
 			}
 
 		if (nfds > 0 && (pfd[PFD_PIPE_MAIN].revents & POLLOUT))
-			if (msgbuf_write(&ibuf_main->w) < 0) {
+			if (msgbuf_write(&ibuf_main->w) <= 0 &&
+			    errno != EAGAIN) {
 				log_warn("pipe write error (to parent)");
 				ntp_quit = 1;
 			}
@@ -344,7 +363,8 @@ ntp_main(int pipe_prnt[2], struct ntpd_conf *nconf, struct passwd *pw)
 		}
 
 		if (nfds > 0 && (pfd[PFD_PIPE_DNS].revents & POLLOUT))
-			if (msgbuf_write(&ibuf_dns->w) < 0) {
+			if (msgbuf_write(&ibuf_dns->w) <= 0 &&
+			    errno != EAGAIN) {
 				log_warn("pipe write error (to dns engine)");
 				ntp_quit = 1;
 			}
@@ -353,6 +373,11 @@ ntp_main(int pipe_prnt[2], struct ntpd_conf *nconf, struct passwd *pw)
 			nfds--;
 			if (ntp_dispatch_imsg_dns() == -1)
 				ntp_quit = 1;
+		}
+
+		if (nfds > 0 && pfd[PFD_SOCK_CTL].revents & (POLLIN|POLLERR)) {
+			nfds--;
+			ctl_cnt += control_accept(fd_ctl);
 		}
 
 		if (nfds > 0 && pfd[PFD_HOTPLUG].revents & (POLLIN|POLLERR)) {
@@ -367,13 +392,17 @@ ntp_main(int pipe_prnt[2], struct ntpd_conf *nconf, struct passwd *pw)
 					ntp_quit = 1;
 			}
 
-		for (; nfds > 0 && j < i; j++)
+		for (; nfds > 0 && j < idx_clients; j++) {
 			if (pfd[j].revents & (POLLIN|POLLERR)) {
 				nfds--;
 				if (client_dispatch(idx2peer[j - idx_peers],
 				    conf->settime) == -1)
 					ntp_quit = 1;
 			}
+		}
+
+		for (; nfds > 0 && j < i; j++)
+			nfds -= control_dispatch_msg(&pfd[j], &ctl_cnt);
 
 		for (s = TAILQ_FIRST(&conf->ntp_sensors); s != NULL;
 		    s = next_s) {
@@ -633,18 +662,12 @@ priv_adjtime(void)
 	qsort(offsets, offset_cnt, sizeof(struct ntp_offset *), offset_compare);
 
 	i = offset_cnt / 2;
-	if (offset_cnt % 2 == 0) {
-		offset_median =
-		    (offsets[i - 1]->offset + offsets[i]->offset) / 2;
-		conf->status.rootdelay =
-		    (offsets[i - 1]->delay + offsets[i]->delay) / 2;
-		conf->status.stratum = MAX(
-		    offsets[i - 1]->status.stratum, offsets[i]->status.stratum);
-	} else {
-		offset_median = offsets[i]->offset;
-		conf->status.rootdelay = offsets[i]->delay;
-		conf->status.stratum = offsets[i]->status.stratum;
-	}
+	if (offset_cnt % 2 == 0)
+		if (offsets[i - 1]->delay < offsets[i]->delay)
+			i -= 1;
+	offset_median = offsets[i]->offset;
+	conf->status.rootdelay = offsets[i]->delay;
+	conf->status.stratum = offsets[i]->status.stratum;
 	conf->status.leap = offsets[i]->status.leap;
 
 	imsg_compose(ibuf_main, IMSG_ADJTIME, 0, 0, -1,

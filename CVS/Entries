@@ -1,16 +1,15 @@
-/buffer.c/1.9/Thu Aug 11 16:26:29 2005//TOPENBSD_3_9
-/Makefile/1.11/Result of merge+Mon Dec 31 13:31:56 2012//TOPENBSD_5_2
-/client.c/1.89/Mon Dec 31 13:31:56 2012//TOPENBSD_5_2
-/config.c/1.19/Result of merge//TOPENBSD_5_2
-/log.c/1.8/Result of merge//TOPENBSD_5_2
-/ntp.c/1.117/Result of merge+Mon Dec 31 13:31:56 2012//TOPENBSD_5_2
-/ntp.h/1.13/Result of merge//TOPENBSD_5_2
-/ntp_msg.c/1.18/Result of merge+Mon Dec 31 13:31:56 2012//TOPENBSD_5_2
-/ntpd.8/1.31/Result of merge+Mon Dec 31 13:31:56 2012//TOPENBSD_5_2
-/ntpd.c/1.69/Result of merge+Mon Dec 31 13:31:56 2012//TOPENBSD_5_2
-/ntpd.conf.5/1.23/Mon Dec 31 13:31:56 2012//TOPENBSD_5_2
-/ntpd.h/1.105/Result of merge+Mon Dec 31 13:31:56 2012//TOPENBSD_5_2
-/parse.y/1.49/Result of merge//TOPENBSD_5_2
-/server.c/1.36/Result of merge+Mon Dec 31 13:31:56 2012//TOPENBSD_5_2
-/util.c/1.14/Mon Dec 31 13:31:56 2012//TOPENBSD_5_2
+/Makefile/1.12/Result of merge+Mon Jun  2 20:31:27 2014//THEAD
+/client.c/1.93/Result of merge+Mon Jun  2 20:31:27 2014//THEAD
+/config.c/1.19/dummy timestamp from new-entry//THEAD
+/log.c/1.8/dummy timestamp from new-entry//THEAD
+/ntp.c/1.120/Result of merge//THEAD
+/ntp.h/1.13/dummy timestamp from new-entry//THEAD
+/ntp_msg.c/1.19/Result of merge//THEAD
+/ntpd.8/1.37/Result of merge+Mon Jun  2 20:31:27 2014//THEAD
+/ntpd.c/1.79/Result of merge+Mon Jun  2 20:31:27 2014//THEAD
+/ntpd.conf.5/1.24/Mon Jun  2 20:31:27 2014//THEAD
+/ntpd.h/1.109/Result of merge//THEAD
+/parse.y/1.52/Result of merge//THEAD
+/server.c/1.38/Result of merge+Mon Jun  2 20:31:27 2014//THEAD
+/util.c/1.15/Result of merge//THEAD
 D

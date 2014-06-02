@@ -1,4 +1,4 @@
-.\" $OpenBSD: ntpd.8,v 1.31 2011/09/17 10:22:00 jmc Exp $
+.\" $OpenBSD: ntpd.8,v 1.37 2014/02/12 15:45:52 schwarze Exp $
 .\"
 .\" Copyright (c) 2003, 2004, 2006 Henning Brauer <henning@openbsd.org>
 .\"
@@ -14,12 +14,12 @@
 .\" AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT
 .\" OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: September 17 2011 $
+.Dd $Mdocdate: February 12 2014 $
 .Dt NTPD 8
 .Os
 .Sh NAME
 .Nm ntpd
-.Nd "Network Time Protocol daemon"
+.Nd Network Time Protocol daemon
 .Sh SYNOPSIS
 .Nm ntpd
 .Bk -words
@@ -35,7 +35,7 @@ or local timedelta sensors.
 can also act as an NTP server itself,
 redistributing the local time.
 It implements the Simple Network Time Protocol version 4,
-as described in RFC 2030,
+as described in RFC 5905,
 and the Network Time Protocol version 3,
 as described in RFC 1305.
 .Pp
@@ -106,6 +106,7 @@ Clock drift is periodically written to the drift file thereafter.
 .Pp
 When
 .Nm
+.Pq engine
 receives a
 .Dv SIGINFO
 signal, it writes its peer and sensor status to
@@ -116,23 +117,33 @@ signal, it writes its peer and sensor status to
 Default configuration file.
 .It Pa /var/db/ntpd.drift
 Drift file.
+.It Pa /var/run/ntpd.sock
+Socket file for communication with
+.Xr ntpctl 8 .
 .El
 .Sh SEE ALSO
 .Xr date 1 ,
 .Xr adjfreq 2 ,
 .Xr adjtime 2 ,
 .Xr ntpd.conf 5 ,
-.Xr rdate 8 ,
-.Xr timed 8
+.Xr ntpctl 8 ,
+.Xr rdate 8
+.Sh STANDARDS
 .Rs
-.%R RFC 1305
-.%T "Network Time Protocol (Version 3)"
+.%A David L. Mills
 .%D March 1992
+.%R RFC 1305
+.%T Network Time Protocol (Version 3): Specification, Implementation and Analysis
 .Re
+.Pp
 .Rs
-.%R RFC 2030
-.%T "Simple Network Time Protocol (SNTP) Version 4"
-.%D October 1996
+.%A David L. Mills
+.%A Jim Martin
+.%A Jack Burbank
+.%A William Kasch
+.%D June 2010
+.%R RFC 5905
+.%T Network Time Protocol Version 4: Protocol and Algorithms Specification
 .Re
 .Sh HISTORY
 The

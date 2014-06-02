@@ -1,4 +1,4 @@
-/*	$OpenBSD: parse.y,v 1.49 2011/12/28 19:32:34 phessler Exp $ */
+/*	$OpenBSD: parse.y,v 1.52 2013/11/25 12:58:42 benno Exp $ */
 
 /*
  * Copyright (c) 2002, 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -62,6 +62,7 @@ struct ntpd_conf		*conf;
 struct opts {
 	int		weight;
 	int		correction;
+	int		stratum;
 	int		rtable;
 	char		*refstr;
 } opts;
@@ -80,7 +81,7 @@ typedef struct {
 %}
 
 %token	LISTEN ON
-%token	SERVER SERVERS SENSOR CORRECTION RTABLE REFID WEIGHT
+%token	SERVER SERVERS SENSOR CORRECTION RTABLE REFID STRATUM WEIGHT
 %token	ERROR
 %token	<v.string>		STRING
 %token	<v.number>		NUMBER
@@ -91,6 +92,7 @@ typedef struct {
 %type	<v.opts>		correction
 %type	<v.opts>		rtable
 %type	<v.opts>		refid
+%type	<v.opts>		stratum
 %type	<v.opts>		weight
 %%
 
@@ -162,8 +164,7 @@ main		: LISTEN ON address listen_opts	{
 					fatal(NULL);
 				if (p->addr != NULL)
 					p->state = STATE_DNS_DONE;
-				if (!(p->rtable > 0 && p->addr &&
-				    p->addr->ss.ss_family != AF_INET))
+				if (!(p->rtable > 0 && p->addr))
 					TAILQ_INSERT_TAIL(&conf->ntp_peers,
 					    p, entry);
 				h = next;
@@ -202,8 +203,7 @@ main		: LISTEN ON address listen_opts	{
 				fatal(NULL);
 			if (p->addr != NULL)
 				p->state = STATE_DNS_DONE;
-			if (!(p->rtable > 0 && p->addr &&
-			    p->addr->ss.ss_family != AF_INET))
+			if (!(p->rtable > 0 && p->addr))
 				TAILQ_INSERT_TAIL(&conf->ntp_peers, p, entry);
 			free($2->name);
 			free($2);
@@ -215,6 +215,7 @@ main		: LISTEN ON address listen_opts	{
 			s->weight = $3.weight;
 			s->correction = $3.correction;
 			s->refstr = $3.refstr;
+			s->stratum = $3.stratum;
 			free($2);
 			TAILQ_INSERT_TAIL(&conf->ntp_conf_sensors, s, entry);
 		}
@@ -268,6 +269,7 @@ sensor_opts_l	: sensor_opts_l sensor_opt
 		;
 sensor_opt	: correction
 		| refid
+		| stratum
 		| weight
 		;
 
@@ -290,6 +292,16 @@ refid		: REFID STRING {
 				YYERROR;
 			}
 			opts.refstr = $2;
+		}
+		;
+
+stratum		: STRATUM NUMBER {
+			if ($2 < 1 || $2 > 15) {
+				yyerror("stratum must be between "
+				    "1 and 15");
+				YYERROR;
+			}
+			opts.stratum = $2;
 		}
 		;
 
@@ -317,6 +329,7 @@ opts_default(void)
 	bzero(&opts, sizeof opts);
 	opts.weight = 1;
 	opts.rtable = -1;
+	opts.stratum = 1;
 }
 
 struct keywords {
@@ -359,6 +372,7 @@ lookup(char *s)
 		{ "sensor",		SENSOR},
 		{ "server",		SERVER},
 		{ "servers",		SERVERS},
+		{ "stratum",		STRATUM},
 		{ "weight",		WEIGHT}
 	};
 	const struct keywords	*p;
@@ -374,9 +388,9 @@ lookup(char *s)
 
 #define MAXPUSHBACK	128
 
-char	*parsebuf;
+u_char	*parsebuf;
 int	 parseindex;
-char	 pushback_buffer[MAXPUSHBACK];
+u_char	 pushback_buffer[MAXPUSHBACK];
 int	 pushback_index = 0;
 
 int
@@ -469,8 +483,8 @@ findeol(void)
 int
 yylex(void)
 {
-	char	 buf[8096];
-	char	*p;
+	u_char	 buf[8096];
+	u_char	*p;
 	int	 quotec, next, c;
 	int	 token;
 
@@ -511,7 +525,7 @@ yylex(void)
 				yyerror("string too long");
 				return (findeol());
 			}
-			*p++ = (char)c;
+			*p++ = c;
 		}
 		yylval.v.string = strdup(buf);
 		if (yylval.v.string == NULL)
